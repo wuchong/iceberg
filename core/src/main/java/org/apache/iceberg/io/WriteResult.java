@@ -19,26 +19,32 @@
 
 package org.apache.iceberg.io;
 
-import java.io.Serializable;
-import java.util.Collections;
-import java.util.List;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.util.CharSequenceSet;
+
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 public class WriteResult implements Serializable {
   private DataFile[] dataFiles;
   private DeleteFile[] deleteFiles;
   private CharSequence[] referencedDataFiles;
+  private Map<Integer, Long> partitionOffsets;
 
   private WriteResult(List<DataFile> dataFiles,
                       List<DeleteFile> deleteFiles,
-                      CharSequenceSet referencedDataFiles) {
+                      CharSequenceSet referencedDataFiles,
+                      Map<Integer, Long> partitionOffsets) {
     this.dataFiles = dataFiles.toArray(new DataFile[0]);
     this.deleteFiles = deleteFiles.toArray(new DeleteFile[0]);
     this.referencedDataFiles = referencedDataFiles.toArray(new CharSequence[0]);
+    this.partitionOffsets = partitionOffsets;
   }
 
   public DataFile[] dataFiles() {
@@ -53,6 +59,10 @@ public class WriteResult implements Serializable {
     return referencedDataFiles;
   }
 
+  public Map<Integer, Long> partitionOffsets() {
+    return partitionOffsets;
+  }
+
   public static Builder builder() {
     return new Builder();
   }
@@ -61,18 +71,20 @@ public class WriteResult implements Serializable {
     private final List<DataFile> dataFiles;
     private final List<DeleteFile> deleteFiles;
     private final CharSequenceSet referencedDataFiles;
+    private final Map<Integer, Long> partitionOffsets;
 
     private Builder() {
       this.dataFiles = Lists.newArrayList();
       this.deleteFiles = Lists.newArrayList();
       this.referencedDataFiles = CharSequenceSet.empty();
+      this.partitionOffsets = Maps.newHashMap();
     }
 
     public Builder add(WriteResult result) {
       addDataFiles(result.dataFiles);
       addDeleteFiles(result.deleteFiles);
       addReferencedDataFiles(result.referencedDataFiles);
-
+      addOffsets(result.partitionOffsets);
       return this;
     }
 
@@ -111,8 +123,19 @@ public class WriteResult implements Serializable {
       return this;
     }
 
+    public Builder addOffsets(Map<Integer, Long> partitionOffsets) {
+      for (Map.Entry<Integer, Long> entry : partitionOffsets.entrySet()) {
+        Long oldOffset = this.partitionOffsets.get(entry.getKey());
+        Long newOffset = entry.getValue();
+        if (oldOffset == null || oldOffset < newOffset) {
+          this.partitionOffsets.put(entry.getKey(), newOffset);
+        }
+      }
+      return this;
+    }
+
     public WriteResult build() {
-      return new WriteResult(dataFiles, deleteFiles, referencedDataFiles);
+      return new WriteResult(dataFiles, deleteFiles, referencedDataFiles, partitionOffsets);
     }
   }
 }

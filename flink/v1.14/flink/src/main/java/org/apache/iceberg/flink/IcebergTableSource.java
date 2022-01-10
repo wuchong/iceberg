@@ -31,6 +31,7 @@ import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DataStreamScanProvider;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
+import org.apache.flink.table.connector.source.SourceProvider;
 import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsLimitPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
@@ -39,6 +40,7 @@ import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.types.DataType;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.flink.source.FlinkSource;
+import org.apache.iceberg.flink.source.IcebergSourceV2;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
@@ -110,6 +112,17 @@ public class IcebergTableSource
         .build();
   }
 
+  private IcebergSourceV2 createSource() {
+    return FlinkSource.forRowData()
+            .tableLoader(loader)
+            .properties(properties)
+            .project(getProjectedSchema())
+            .limit(limit)
+            .filters(filters)
+            .flinkConf(readableConfig)
+            .buildSource();
+  }
+
   private TableSchema getProjectedSchema() {
     if (projectedFields == null) {
       return schema;
@@ -157,17 +170,18 @@ public class IcebergTableSource
 
   @Override
   public ScanRuntimeProvider getScanRuntimeProvider(ScanContext runtimeProviderContext) {
-    return new DataStreamScanProvider() {
-      @Override
-      public DataStream<RowData> produceDataStream(StreamExecutionEnvironment execEnv) {
-        return createDataStream(execEnv);
-      }
-
-      @Override
-      public boolean isBounded() {
-        return FlinkSource.isBounded(properties);
-      }
-    };
+    return SourceProvider.of(createSource());
+//    return new DataStreamScanProvider() {
+//      @Override
+//      public DataStream<RowData> produceDataStream(StreamExecutionEnvironment execEnv) {
+//        return createDataStream(execEnv);
+//      }
+//
+//      @Override
+//      public boolean isBounded() {
+//        return FlinkSource.isBounded(properties);
+//      }
+//    };
   }
 
   @Override

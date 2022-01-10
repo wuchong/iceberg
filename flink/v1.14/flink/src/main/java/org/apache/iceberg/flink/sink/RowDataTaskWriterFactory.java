@@ -19,7 +19,11 @@
 
 package org.apache.iceberg.flink.sink;
 
+import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.iceberg.FileFormat;
@@ -34,6 +38,7 @@ import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.PartitionedFanoutWriter;
 import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.io.UnpartitionedWriter;
+import org.apache.iceberg.io.WriteResult;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.util.ArrayUtil;
 
@@ -89,7 +94,7 @@ public class RowDataTaskWriterFactory implements TaskWriterFactory<RowData> {
     if (equalityFieldIds == null || equalityFieldIds.isEmpty()) {
       // Initialize a task writer to write INSERT only.
       if (spec.isUnpartitioned()) {
-        return new UnpartitionedWriter<>(spec, format, appenderFactory, outputFileFactory, io, targetFileSizeBytes);
+        return new RowDataUnpartitionedWriter(spec, format, appenderFactory, outputFileFactory, io, targetFileSizeBytes, flinkSchema);
       } else {
         return new RowDataPartitionedFanoutWriter(spec, format, appenderFactory, outputFileFactory,
             io, targetFileSizeBytes, schema, flinkSchema);
@@ -123,6 +128,44 @@ public class RowDataTaskWriterFactory implements TaskWriterFactory<RowData> {
     protected PartitionKey partition(RowData row) {
       partitionKey.partition(rowDataWrapper.wrap(row));
       return partitionKey;
+    }
+  }
+
+  private static class RowDataUnpartitionedWriter extends UnpartitionedWriter<RowData> {
+
+    private final boolean commitKafkaOffsets;
+    private final int partitionColumnIndex;
+    private final int offsetColumnIndex;
+    private final Map<Integer, Long> partitionOffsets = new HashMap<>();
+
+    public RowDataUnpartitionedWriter(PartitionSpec spec, FileFormat format, FileAppenderFactory<RowData> appenderFactory, OutputFileFactory fileFactory, FileIO io, long targetFileSize, RowType flinkSchema) {
+      super(spec, format, appenderFactory, fileFactory, io, targetFileSize);
+      List<String> fieldNames = flinkSchema.getFieldNames();
+      System.out.println("flink schema: " + flinkSchema);
+      this.partitionColumnIndex = fieldNames.indexOf("partition");
+      this.offsetColumnIndex = fieldNames.indexOf("offset");
+      this.commitKafkaOffsets = partitionColumnIndex >= 0 && offsetColumnIndex >= 0;
+    }
+
+    @Override
+    public void write(RowData row) throws IOException {
+      if (commitKafkaOffsets) {
+        int partition = row.getInt(partitionColumnIndex);
+        long offset = row.getLong(offsetColumnIndex);
+        if (partitionOffsets.containsKey(partition)) {
+          partitionOffsets.put(partition, Math.max(offset, partitionOffsets.get(partition)));
+        } else {
+          partitionOffsets.put(partition, offset);
+        }
+      }
+      super.write(row);
+    }
+
+    @Override
+    public WriteResult complete() throws IOException {
+      WriteResult result = super.complete();
+      System.out.println("writer complete for committing: " + commitKafkaOffsets + " offset: " + partitionOffsets);
+      return WriteResult.builder().add(result).addOffsets(partitionOffsets).build();
     }
   }
 }

@@ -21,8 +21,11 @@ package org.apache.iceberg.flink.source;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ReadableConfig;
@@ -32,6 +35,7 @@ import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.data.RowData;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableScan;
 import org.apache.iceberg.encryption.EncryptionManager;
@@ -165,6 +169,47 @@ public class FlinkSource {
     public Builder flinkConf(ReadableConfig config) {
       this.readableConfig = config;
       return this;
+    }
+
+    public IcebergSourceV2 buildSource() {
+      Preconditions.checkNotNull(tableLoader, "TableLoader should not be null");
+
+      Schema icebergSchema;
+      FileIO io;
+      EncryptionManager encryption;
+      if (table == null) {
+        // load required fields by table loader.
+        tableLoader.open();
+        try (TableLoader loader = tableLoader) {
+          table = loader.loadTable();
+          icebergSchema = table.schema();
+          io = table.io();
+          encryption = table.encryption();
+        } catch (IOException e) {
+          throw new UncheckedIOException(e);
+        }
+      } else {
+        icebergSchema = table.schema();
+        io = table.io();
+        encryption = table.encryption();
+      }
+
+      Snapshot snapshot = table.currentSnapshot();
+      Map<Integer, Long> offsetsMap = new HashMap<>();
+      if (snapshot != null) {
+        long snapshotId = snapshot.snapshotId();
+        contextBuilder.useSnapshotId(snapshotId);
+        String kafkaOffsets = Optional.ofNullable(snapshot.summary().get("kafka-offsets")).orElse("");
+        offsetsMap.putAll(KafkaOffsetsUtils.stringToKafkaOffsets(kafkaOffsets));
+      }
+
+      if (projectedSchema == null) {
+        contextBuilder.project(icebergSchema);
+      } else {
+        contextBuilder.project(FlinkSchemaUtil.convert(icebergSchema, projectedSchema));
+      }
+
+      return new IcebergSourceV2(offsetsMap, tableLoader, io, encryption, contextBuilder.build(), icebergSchema);
     }
 
     public FlinkInputFormat buildFormat() {

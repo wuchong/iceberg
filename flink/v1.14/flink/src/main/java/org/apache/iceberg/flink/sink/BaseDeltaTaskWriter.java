@@ -20,7 +20,10 @@
 package org.apache.iceberg.flink.sink;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.iceberg.FileFormat;
@@ -33,6 +36,7 @@ import org.apache.iceberg.io.BaseTaskWriter;
 import org.apache.iceberg.io.FileAppenderFactory;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.OutputFileFactory;
+import org.apache.iceberg.io.WriteResult;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.types.TypeUtil;
 
@@ -42,6 +46,10 @@ abstract class BaseDeltaTaskWriter extends BaseTaskWriter<RowData> {
   private final Schema deleteSchema;
   private final RowDataWrapper wrapper;
   private final boolean upsert;
+  private final boolean commitKafkaOffsets;
+  private final int partitionColumnIndex;
+  private final int offsetColumnIndex;
+  private final Map<Integer, Long> partitionOffsets = new HashMap<>();
 
   BaseDeltaTaskWriter(PartitionSpec spec,
                       FileFormat format,
@@ -58,6 +66,10 @@ abstract class BaseDeltaTaskWriter extends BaseTaskWriter<RowData> {
     this.deleteSchema = TypeUtil.select(schema, Sets.newHashSet(equalityFieldIds));
     this.wrapper = new RowDataWrapper(flinkSchema, schema.asStruct());
     this.upsert = upsert;
+    List<String> fieldNames = flinkSchema.getFieldNames();
+    this.partitionColumnIndex = fieldNames.indexOf("partition");
+    this.offsetColumnIndex = fieldNames.indexOf("offset");
+    this.commitKafkaOffsets = partitionColumnIndex >= 0 && offsetColumnIndex >= 0;
   }
 
   abstract RowDataDeltaWriter route(RowData row);
@@ -68,6 +80,15 @@ abstract class BaseDeltaTaskWriter extends BaseTaskWriter<RowData> {
 
   @Override
   public void write(RowData row) throws IOException {
+    if (commitKafkaOffsets) {
+      int partition = row.getInt(partitionColumnIndex);
+      long offset = row.getLong(offsetColumnIndex);
+      if (partitionOffsets.containsKey(partition)) {
+        partitionOffsets.put(partition, Math.max(offset, partitionOffsets.get(partition)));
+      } else {
+        partitionOffsets.put(partition, offset);
+      }
+    }
     RowDataDeltaWriter writer = route(row);
 
     switch (row.getRowKind()) {
@@ -92,6 +113,13 @@ abstract class BaseDeltaTaskWriter extends BaseTaskWriter<RowData> {
       default:
         throw new UnsupportedOperationException("Unknown row kind: " + row.getRowKind());
     }
+  }
+
+  @Override
+  public WriteResult complete() throws IOException {
+    WriteResult result = super.complete();
+    System.out.println("writer complete for offset: " + partitionOffsets);
+    return WriteResult.builder().add(result).addOffsets(partitionOffsets).build();
   }
 
   protected class RowDataDeltaWriter extends BaseEqualityDeltaWriter {

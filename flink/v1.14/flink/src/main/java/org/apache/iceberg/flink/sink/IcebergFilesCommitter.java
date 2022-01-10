@@ -46,6 +46,7 @@ import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.SnapshotUpdate;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.flink.TableLoader;
+import org.apache.iceberg.flink.source.KafkaOffsetsUtils;
 import org.apache.iceberg.io.WriteResult;
 import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
@@ -247,15 +248,19 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
     // Commit the overwrite transaction.
     ReplacePartitions dynamicOverwrite = table.newReplacePartitions();
 
+    WriteResult.Builder builder = WriteResult.builder();
     int numFiles = 0;
     for (WriteResult result : pendingResults.values()) {
       Preconditions.checkState(result.referencedDataFiles().length == 0, "Should have no referenced data files.");
 
       numFiles += result.dataFiles().length;
       Arrays.stream(result.dataFiles()).forEach(dynamicOverwrite::addFile);
+      builder.add(result);
     }
 
-    commitOperation(dynamicOverwrite, numFiles, 0, "dynamic partition overwrite", newFlinkJobId, checkpointId);
+    String kafkaOffsets = KafkaOffsetsUtils.kafkaOffsetsToString(builder.build().partitionOffsets());
+    System.out.println("replacePartitions kafkaOffsets: " + kafkaOffsets);
+    commitOperation(dynamicOverwrite, numFiles, 0, "dynamic partition overwrite", newFlinkJobId, checkpointId, kafkaOffsets);
   }
 
   private void commitDeltaTxn(NavigableMap<Long, WriteResult> pendingResults, String newFlinkJobId, long checkpointId) {
@@ -265,15 +270,19 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
       // To be compatible with iceberg format V1.
       AppendFiles appendFiles = table.newAppend();
 
+      WriteResult.Builder builder = WriteResult.builder();
       int numFiles = 0;
       for (WriteResult result : pendingResults.values()) {
         Preconditions.checkState(result.referencedDataFiles().length == 0, "Should have no referenced data files.");
 
         numFiles += result.dataFiles().length;
         Arrays.stream(result.dataFiles()).forEach(appendFiles::appendFile);
+        builder.add(result);
       }
 
-      commitOperation(appendFiles, numFiles, 0, "append", newFlinkJobId, checkpointId);
+      String kafkaOffsets = KafkaOffsetsUtils.kafkaOffsetsToString(builder.build().partitionOffsets());
+      System.out.println("commitDeltaTxn no deletes kafkaOffsets: " + kafkaOffsets);
+      commitOperation(appendFiles, numFiles, 0, "append", newFlinkJobId, checkpointId, kafkaOffsets);
     } else {
       // To be compatible with iceberg format V2.
       for (Map.Entry<Long, WriteResult> e : pendingResults.entrySet()) {
@@ -296,17 +305,20 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
         int numDeleteFiles = result.deleteFiles().length;
         Arrays.stream(result.deleteFiles()).forEach(rowDelta::addDeletes);
 
-        commitOperation(rowDelta, numDataFiles, numDeleteFiles, "rowDelta", newFlinkJobId, e.getKey());
+        String kafkaOffsets = KafkaOffsetsUtils.kafkaOffsetsToString(result.partitionOffsets());
+        System.out.println("commitDeltaTxn has deletes kafkaOffsets: " + kafkaOffsets);
+        commitOperation(rowDelta, numDataFiles, numDeleteFiles, "rowDelta", newFlinkJobId, e.getKey(), kafkaOffsets);
       }
     }
   }
 
   private void commitOperation(SnapshotUpdate<?> operation, int numDataFiles, int numDeleteFiles, String description,
-                               String newFlinkJobId, long checkpointId) {
-    LOG.info("Committing {} with {} data files and {} delete files to table {}", description, numDataFiles,
-        numDeleteFiles, table);
+                               String newFlinkJobId, long checkpointId, String kafkaOffsets) {
+    LOG.info("Committing {} with {} data files and {} delete files and [{}] offset to table {}", description, numDataFiles,
+        numDeleteFiles, kafkaOffsets, table);
     operation.set(MAX_COMMITTED_CHECKPOINT_ID, Long.toString(checkpointId));
     operation.set(FLINK_JOB_ID, newFlinkJobId);
+    operation.set("kafka-offsets", kafkaOffsets);
 
     long start = System.currentTimeMillis();
     operation.commit(); // abort is automatically called if this fails.

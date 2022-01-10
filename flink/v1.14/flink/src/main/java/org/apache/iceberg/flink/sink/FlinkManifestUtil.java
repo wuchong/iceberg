@@ -21,6 +21,7 @@ package org.apache.iceberg.flink.sink;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
@@ -31,6 +32,7 @@ import org.apache.iceberg.ManifestWriter;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableOperations;
+import org.apache.iceberg.flink.source.KafkaOffsetsUtils;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.OutputFile;
@@ -94,7 +96,10 @@ class FlinkManifestUtil {
       deleteManifest = deleteManifestWriter.toManifestFile();
     }
 
-    return new DeltaManifests(dataManifest, deleteManifest, result.referencedDataFiles());
+    String kafkaOffsets = KafkaOffsetsUtils.kafkaOffsetsToString(result.partitionOffsets());
+    System.out.println("readCompletedFiles for deltaManifests offset: " + kafkaOffsets);
+
+    return new DeltaManifests(dataManifest, deleteManifest, result.referencedDataFiles(), kafkaOffsets);
   }
 
   static WriteResult readCompletedFiles(DeltaManifests deltaManifests, FileIO io) throws IOException {
@@ -112,6 +117,9 @@ class FlinkManifestUtil {
         builder.addDeleteFiles(deleteFiles);
       }
     }
+    Map<Integer, Long> kafkaOffsets = KafkaOffsetsUtils.stringToKafkaOffsets(deltaManifests.kafkaOffsets());
+    builder.addOffsets(kafkaOffsets);
+    System.out.println("readCompletedFiles for deltaManifests offset: " + kafkaOffsets);
 
     return builder.addReferencedDataFiles(deltaManifests.referencedDataFiles())
         .build();

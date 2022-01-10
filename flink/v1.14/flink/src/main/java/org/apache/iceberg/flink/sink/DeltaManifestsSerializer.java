@@ -70,6 +70,8 @@ class DeltaManifestsSerializer implements SimpleVersionedSerializer<DeltaManifes
       out.writeUTF(referencedDataFiles[i].toString());
     }
 
+    out.writeUTF(deltaManifests.kafkaOffsets());
+
     return binaryOut.toByteArray();
   }
 
@@ -117,6 +119,8 @@ class DeltaManifestsSerializer implements SimpleVersionedSerializer<DeltaManifes
       referencedDataFiles[i] = in.readUTF();
     }
 
-    return new DeltaManifests(dataManifest, deleteManifest, referencedDataFiles);
+    String kafkaOffsets = in.readUTF();
+
+    return new DeltaManifests(dataManifest, deleteManifest, referencedDataFiles, kafkaOffsets);
   }
 }

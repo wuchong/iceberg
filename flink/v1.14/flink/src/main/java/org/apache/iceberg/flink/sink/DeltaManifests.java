@@ -31,17 +31,19 @@ class DeltaManifests {
   private final ManifestFile dataManifest;
   private final ManifestFile deleteManifest;
   private final CharSequence[] referencedDataFiles;
+  private final String kafkaOffsets;
 
   DeltaManifests(ManifestFile dataManifest, ManifestFile deleteManifest) {
-    this(dataManifest, deleteManifest, EMPTY_REF_DATA_FILES);
+    this(dataManifest, deleteManifest, EMPTY_REF_DATA_FILES, "");
   }
 
-  DeltaManifests(ManifestFile dataManifest, ManifestFile deleteManifest, CharSequence[] referencedDataFiles) {
+  DeltaManifests(ManifestFile dataManifest, ManifestFile deleteManifest, CharSequence[] referencedDataFiles, String kafkaOffsets) {
     Preconditions.checkNotNull(referencedDataFiles, "Referenced data files shouldn't be null.");
 
     this.dataManifest = dataManifest;
     this.deleteManifest = deleteManifest;
     this.referencedDataFiles = referencedDataFiles;
+    this.kafkaOffsets = kafkaOffsets;
   }
 
   ManifestFile dataManifest() {
@@ -54,6 +56,10 @@ class DeltaManifests {
 
   CharSequence[] referencedDataFiles() {
     return referencedDataFiles;
+  }
+
+  String kafkaOffsets() {
+    return kafkaOffsets;
   }
 
   List<ManifestFile> manifests() {
